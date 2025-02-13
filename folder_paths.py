@@ -309,6 +309,8 @@ def get_filename_list_(folder_name: str) -> tuple[list[str], dict[str, float], f
     return sorted(list(output_list)), output_folders, time.perf_counter()
 
 def cached_filename_list_(folder_name: str) -> tuple[list[str], dict[str, float], float] | None:
+    return None  # disable cache by always returning None
+
     strong_cache = cache_helper.get(folder_name)
     if strong_cache is not None:
         return strong_cache
