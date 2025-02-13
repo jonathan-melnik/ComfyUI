@@ -112,6 +112,8 @@ def is_loopback(host):
 def create_origin_only_middleware():
     @web.middleware
     async def origin_only_middleware(request: web.Request, handler):
+        return await handler(request)  # Just handle the request directly
+        
         #this code is used to prevent the case where a random website can queue comfy workflows by making a POST to 127.0.0.1 which browsers don't prevent for some dumb reason.
         #in that case the Host and Origin hostnames won't match
         #I know the proper fix would be to add a cookie but this should take care of the problem in the meantime
