@@ -35,7 +35,10 @@ def send_heartbeat():
         time.sleep(HEARTBEAT_INTERVAL)
 
 # Start the heartbeat thread when imported (but only once)
-if not heartbeat_started:
+def start():
+    global heartbeat_started
+    if heartbeat_started:
+        return
     heartbeat_started = True
     heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
     heartbeat_thread.start()

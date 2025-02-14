@@ -34,6 +34,7 @@ from app.model_manager import ModelFileManager
 from app.custom_node_manager import CustomNodeManager
 from typing import Optional
 from api_server.routes.internal.internal_routes import InternalRoutes
+import heartbeat
 
 class BinaryEventTypes:
     PREVIEW_IMAGE = 1
@@ -852,6 +853,8 @@ class PromptServer():
 
         if call_on_start is not None:
             call_on_start(scheme, self.address, self.port)
+
+        heartbeat.start()
 
     def add_on_prompt_handler(self, handler):
         self.on_prompt_handlers.append(handler)
