@@ -1,3 +1,5 @@
+# ---- server.py ----
+
 import os
 import sys
 import asyncio
@@ -58,6 +60,8 @@ async def cache_control(request: web.Request, handler):
 async def compress_body(request: web.Request, handler):
     accept_encoding = request.headers.get("Accept-Encoding", "")
     response: web.Response = await handler(request)
+    if args.disable_compres_response_body:
+        return response
     if not isinstance(response, web.Response):
         return response
     if response.content_type not in ["application/json", "text/plain"]:
@@ -112,8 +116,9 @@ def is_loopback(host):
 
 def create_origin_only_middleware():
     @web.middleware
-    async def origin_only_middleware(request: web.Request, handler):
+    async def origin_only_middleware(request: web.Request, handler):        
         return await handler(request)  # Just handle the request directly
+        # Note: I commented this code for now to make it work, and we need to check later if we want to re add it
         
         #this code is used to prevent the case where a random website can queue comfy workflows by making a POST to 127.0.0.1 which browsers don't prevent for some dumb reason.
         #in that case the Host and Origin hostnames won't match
@@ -178,7 +183,7 @@ class PromptServer():
 
         max_upload_size = round(args.max_upload_size * 1024 * 1024)
         self.app = web.Application(client_max_size=max_upload_size, middlewares=middlewares)
-        self.sockets = dict()
+        self.ws = None # We only use one websocket connected to our express application running in the same server
         self.web_root = (
             FrontendManager.init_frontend(args.front_end_version)
             if args.front_end_root is None
@@ -190,34 +195,39 @@ class PromptServer():
         self.last_node_id = None
         self.client_id = None
 
-        self.on_prompt_handlers = []
+        self.on_prompt_handlers = []        
 
+
+        # This route has been repurposed to use only one websocket for all clients
+        # The proxy server will send this request to initialize the websocket connection
         @routes.get('/ws')
         async def websocket_handler(request):
             ws = web.WebSocketResponse()
             await ws.prepare(request)
-            sid = request.rel_url.query.get('clientId', '')
-            if sid:
-                # Reusing existing session, remove old
-                self.sockets.pop(sid, None)
-            else:
-                sid = uuid.uuid4().hex
-
-            self.sockets[sid] = ws
+            
+            # Store the active connection
+            self.ws = ws     
 
             try:
-                # Send initial state to the new client
-                await self.send("status", { "status": self.get_queue_info(), 'sid': sid }, sid)
-                # On reconnect if we are the currently executing client send the current node
-                if self.client_id == sid and self.last_node_id is not None:
-                    await self.send("executing", { "node": self.last_node_id }, sid)
-
                 async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.ERROR:
-                        logging.warning('ws connection closed with exception %s' % ws.exception())
+                    if msg.type == aiohttp.WSMsgType.PING:
+                        logging.info("Received ping on backend websocket.")
+                        await ws.pong()  # Reply to ping if needed
+                    elif msg.type == aiohttp.WSMsgType.PONG:
+                        logging.info("Received pong on backend websocket.")
+                    elif msg.type == aiohttp.WSMsgType.TEXT:
+                        logging.info(f"Received text message: {msg.data}")
+                    elif msg.type == aiohttp.WSMsgType.BINARY:
+                        logging.info(f"Received binary message, length: {len(msg.data)}")
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        logging.error(f"WebSocket error: {ws.exception()}")
+            except Exception as e:
+                logging.error(f"Exception in backend websocket handler: {e}")
             finally:
-                self.sockets.pop(sid, None)
-            return ws
+                logging.info("Backend websocket connection closed.")
+                if self.ws is ws:
+                    self.ws = None
+            return ws           
 
         @routes.get("/")
         async def get_root(request):
@@ -703,7 +713,7 @@ class PromptServer():
                 for id_to_delete in to_delete:
                     self.prompt_queue.delete_history_item(id_to_delete)
 
-            return web.Response(status=200)
+            return web.Response(status=200)    
 
     async def setup(self):
         timeout = aiohttp.ClientTimeout(total=None) # no timeout
@@ -752,12 +762,21 @@ class PromptServer():
         else:
             await self.send_json(event, data, sid)
 
-    def encode_bytes(self, event, data):
+    def encode_bytes(self, event, data, sid=None):
         if not isinstance(event, int):
             raise RuntimeError(f"Binary event types must be integers, got {event}")
 
-        packed = struct.pack(">I", event)
-        message = bytearray(packed)
+        # Pack the event type (4 bytes)
+        header = struct.pack(">I", event)
+        # Pack the sid: first its length (4 bytes) then its UTF-8 encoded bytes.
+        if sid is not None:
+            sid_encoded = sid.encode("utf-8")
+            sid_length = len(sid_encoded)
+            sid_header = struct.pack(">I", sid_length) + sid_encoded
+        else:
+            sid_header = struct.pack(">I", 0)  # 0-length sid
+        message = bytearray(header)
+        message.extend(sid_header)
         message.extend(data)
         return message
 
@@ -786,24 +805,16 @@ class PromptServer():
         await self.send_bytes(BinaryEventTypes.PREVIEW_IMAGE, preview_bytes, sid=sid)
 
     async def send_bytes(self, event, data, sid=None):
-        message = self.encode_bytes(event, data)
-
-        if sid is None:
-            sockets = list(self.sockets.values())
-            for ws in sockets:
-                await send_socket_catch_exception(ws.send_bytes, message)
-        elif sid in self.sockets:
-            await send_socket_catch_exception(self.sockets[sid].send_bytes, message)
+        # Modified encode_bytes to accept the sid parameter.
+        message = self.encode_bytes(event, data, sid)
+        await send_socket_catch_exception(self.ws.send_bytes, message)
 
     async def send_json(self, event, data, sid=None):
+        # Modify the JSON message to include sid
         message = {"type": event, "data": data}
-
-        if sid is None:
-            sockets = list(self.sockets.values())
-            for ws in sockets:
-                await send_socket_catch_exception(ws.send_json, message)
-        elif sid in self.sockets:
-            await send_socket_catch_exception(self.sockets[sid].send_json, message)
+        if sid is not None:
+            message["sid"] = sid
+        await send_socket_catch_exception(self.ws.send_json, message)
 
     def send_sync(self, event, data, sid=None):
         self.loop.call_soon_threadsafe(
