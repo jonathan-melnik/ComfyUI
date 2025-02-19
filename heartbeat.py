@@ -8,7 +8,6 @@ import os
 
 base_url = args.express_server_url.rstrip('/') + '/'  # Ensures a single trailing slash
 URL = urljoin(base_url, 'backend/heartbeat')
-INSTANCE_ID = str(uuid.uuid4())
 
 # Hardcoded heartbeat interval (2 seconds)
 # HEARTBEAT_INTERVAL = 2  
@@ -25,7 +24,6 @@ def send_heartbeat():
     while True:
         try:
             payload = {
-                "instanceId": INSTANCE_ID,
                 "port": args.port,
                 "type": "cpu" if args.cpu else "gpu",
             }
