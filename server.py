@@ -212,21 +212,26 @@ class PromptServer():
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.PING:
                         logging.info("Received ping on backend websocket.")
-                        await ws.pong()  # Reply to ping if needed
+                        await ws.pong()
                     elif msg.type == aiohttp.WSMsgType.PONG:
                         logging.info("Received pong on backend websocket.")
                     elif msg.type == aiohttp.WSMsgType.TEXT:
-                        logging.info(f"Received text message: {msg.data}")
+                        try:
+                            text_data = msg.data.strip()
+                            logging.info(f"Received text message: {text_data}")
+                        except UnicodeDecodeError:
+                            logging.error("Invalid UTF-8 text message received")
                     elif msg.type == aiohttp.WSMsgType.BINARY:
                         logging.info(f"Received binary message, length: {len(msg.data)}")
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         logging.error(f"WebSocket error: {ws.exception()}")
-            except Exception as e:
+            except Exception as e:              
                 logging.error(f"Exception in backend websocket handler: {e}")
             finally:
-                logging.info("Backend websocket connection closed.")
+                logging.info("Backend websocket connection closed.")                
                 if self.ws is ws:
                     self.ws = None
+
             return ws           
 
         @routes.get("/")
