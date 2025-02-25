@@ -641,6 +641,20 @@ class PromptServer():
             queue_info['queue_running'] = current_queue[0]
             queue_info['queue_pending'] = current_queue[1]
             return web.json_response(queue_info)
+        
+        @routes.post("/validate_prompt")
+        async def validate_prompt(request):
+            json_data =  await request.json()
+            if "prompt" in json_data:
+                prompt = json_data["prompt"]
+                valid = execution.validate_prompt(prompt)
+                if valid[0]:
+                    return web.json_response({"valid":True})
+                else:
+                    logging.warning("invalid prompt: {}".format(valid[1]))
+                    return web.json_response({"valid":False, "error": valid[1], "node_errors": valid[3]}, status=400)
+            else:
+                return web.json_response({"valid":False, "error": "no prompt", "node_errors": []}, status=400)
 
         @routes.post("/prompt")
         async def post_prompt(request):
